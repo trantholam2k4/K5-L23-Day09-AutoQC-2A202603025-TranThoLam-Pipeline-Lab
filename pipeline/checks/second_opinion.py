@@ -40,5 +40,97 @@ from ..model_cache import get_preds  # noqa: F401
 
 
 def run(ds, cfg, preds=None):
-    # TODO
-    raise NotImplementedError("check second_opinion chưa làm")
+    if preds is None:
+        preds = get_preds(ds, cfg, "checker")
+
+    scfg = cfg["second_opinion"]
+    issues = []
+    num_classes = len(ds.classes)
+
+    for img_path in ds.image_files():
+        stem = img_path.stem
+        raw_lines = ds.read_label_lines(stem)
+
+        if stem not in preds or raw_lines is None:
+            continue
+
+        size = ds.image_size(stem)
+        if size is None:
+            continue
+        img_w, img_h = size
+        img_preds = preds[stem]
+        valid_gt = ds.valid_boxes(stem)
+
+        # =====================================================================
+        # CHIỀU 1: DUYỆT TỪNG DỰ ĐOÁN CỦA MODEL (P) ĐỂ BẮT MISSING / LOOSE / WRONG_CLASS
+        # =====================================================================
+        for p in img_preds:
+            p_cls, conf, rx, ry, rw, rh = p
+            area_px = (rw * img_w) * (rh * img_h)
+
+            if conf < scfg["conf"] or area_px < scfg["min_area_px"]:
+                continue
+
+            r_box = (rx, ry, rw, rh)
+            cands = []
+            for l_cls, lx, ly, lw, lh in valid_gt:
+                iou = iou_xywh(r_box, (lx, ly, lw, lh))
+                if iou >= scfg["iou_missing"]:
+                    cands.append((l_cls, iou))
+
+            # Nhánh 1: Không có bất kỳ nhãn nào gần đó -> Model thấy vật mà người quên gán
+            if len(cands) == 0:
+                issues.append(Issue(
+                    "second_opinion", WARN, "POSSIBLE_MISSING", stem,
+                    f"model phát hiện lớp {p_cls} (conf={conf:.2f}) nhưng thiếu nhãn",
+                    extra={"conf": round(conf, 4)},
+                ))
+                continue
+
+            same_cls = [iou for (l_cls, iou) in cands if l_cls == p_cls]
+            diff_cls = [iou for (l_cls, iou) in cands if l_cls != p_cls]
+
+            # Nhánh 2: Có nhãn cùng lớp -> Kiểm tra xem box vẽ có bị lỏng/lệch không
+            if len(same_cls) > 0:
+                best_same = max(same_cls)
+                if best_same < scfg["iou_loose"]:
+                    issues.append(Issue(
+                        "second_opinion", WARN, "POSSIBLE_LOOSE_BOX", stem,
+                        f"box cùng lớp {p_cls} nhưng IoU thấp ({best_same:.2f})",
+                        extra={"conf": round(conf, 4), "iou": round(best_same, 4)},
+                    ))
+            # Nhánh 3: Không có nhãn cùng lớp -> Kiểm tra xem có phải gán nhầm sang lớp khác không
+            else:
+                best_diff = max(diff_cls)
+                if best_diff >= scfg["iou_match"]:
+                    issues.append(Issue(
+                        "second_opinion", WARN, "POSSIBLE_WRONG_CLASS", stem,
+                        f"nghi gán nhầm lớp (model đoán {p_cls}, IoU={best_diff:.2f})",
+                        extra={"conf": round(conf, 4), "iou": round(best_diff, 4)},
+                    ))
+
+        # =====================================================================
+        # CHIỀU 2: DUYỆT TỪNG DÒNG NHÃN HỢP LỆ ĐỂ BẮT POSSIBLE_FALSE_POS
+        # =====================================================================
+        fp_preds = [p for p in img_preds if p[1] >= scfg["fp_conf"]]
+
+        for line_idx, line in raw_lines:
+            try:
+                l_cls, lx, ly, lw, lh = parse_yolo_line(line)
+            except ValueError:
+                continue
+            if l_cls < 0 or l_cls >= num_classes:
+                continue
+
+            l_box = (lx, ly, lw, lh)
+            best_iou = max((iou_xywh(l_box, (p[2], p[3], p[4], p[5])) for p in fp_preds), default=0.0)
+
+            if best_iou < scfg["iou_missing"]:
+                issues.append(Issue(
+                    "second_opinion", WARN, "POSSIBLE_FALSE_POS", stem,
+                    f"nhãn lớp {l_cls} không khớp dự đoán nào của model",
+                    line=line_idx,
+                    extra={"iou": round(best_iou, 4)},
+                ))
+
+    return issues
