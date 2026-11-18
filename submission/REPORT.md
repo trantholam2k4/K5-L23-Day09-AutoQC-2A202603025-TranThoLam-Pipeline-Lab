@@ -62,7 +62,21 @@ Chưa train: ghi "chưa chạy" và lý do, rồi bỏ qua phần còn lại c�
 
  chênh mAP50 (clean − raw) so với **độ lệch chuẩn giữa các seed**; kết luận **trung thực** (nằm trong nhiễu thì nói là chưa kết luận được); ≥ 2 giả thuyết giải thích (ảnh trùng/rò rỉ test trong `raw`, nhãn máy còn lại trong `clean`, test chỉ 100 ảnh…) và cách kiểm.
 
-Chưa chạy (tập trung hoàn thiện phần lõi pipeline và kiểm tra qua --no-train, chưa chạy huấn luyện đối chứng trên GPU)
+## 5. Train: raw vs clean
+Huấn luyện đối chứng mô hình **YOLOv26n** (`20 epoch`, `2 seed: 0, 1`, đánh giá trên `data/test/` 100 ảnh):
+
+| biến thể | #ảnh train | số seed | map50 (TB ± độ lệch) | map50_95 (TB ± độ lệch) | precision (TB ± độ lệch) | recall (TB ± độ lệch) |
+|---|---:|---:|---|---|---|---|
+| raw | 224 | 2 | 0.726 ± 0.000 | 0.512 ± 0.004 | 0.764 ± 0.061 | 0.649 ± 0.028 |
+| clean | 202 | 2 | 0.712 ± 0.012 | 0.489 ± 0.009 | 0.772 ± 0.054 | 0.627 ± 0.029 |
+
+Chênh mAP50 (clean − raw) = **-0.013** (trong đó `seed 0` của `clean` đạt `0.7206` sát với `raw` `0.7256`, còn `seed 1` giảm xuống `0.7043`).
+
+* **Kết luận trung thực:** Chưa đủ cơ sở kết luận tập `clean` làm giảm hiệu năng thực tế của mô hình. Mức chênh lệch `-0.013` nằm xấp xỉ ngay trong biên độ dao động ngẫu nhiên giữa các seed của `clean` (`std = 0.012`), đồng thời `precision` của `clean` thực tế đã cải thiện (`0.764 → 0.772`) nhờ loại bỏ được nhãn sai/trùng, chỉ giảm nhẹ `recall` (`0.649 → 0.627`).
+* **Giả thuyết 1 — Rò rỉ dữ liệu (`LEAK_TEST`) và ảnh trùng trong `raw` làm điểm `raw` cao giả tạo:** Ở bước Intake, pipeline đã loại **5 ảnh `LEAK_TEST`** trùng với kho `test/val` và **12 ảnh trùng (`DUP_IMAGE_EXACT/NEAR`)** khỏi `clean`. Tập `raw` giữ nguyên các ảnh này nên mô hình `raw` có lợi thế "học tủ" một phần tập kiểm thử.
+  * *Cách kiểm chứng:* Chỉ loại bỏ 5 ảnh `LEAK_TEST` khỏi tập `raw` rồi huấn luyện lại để đo mức sụt giảm `mAP50` thực của `raw`.
+* **Giả thuyết 2 — Tập `clean_v1` mới ở trạng thái `Hold` (còn 29/202 ảnh cảnh báo chưa duyệt) và cỡ mẫu nhỏ:** Ngân sách 80 ảnh chưa xử lý hết 40 cảnh báo `second_opinion` (còn tồn đọng các ca `POSSIBLE_MISSING` và `POSSIBLE_WRONG_CLASS`), đồng thời việc loại bớt 22 ảnh trên tổng số vốn ít (202 vs 224 ảnh) khiến `recall` giảm nhẹ và phương sai giữa 2 seed lớn trên tập `test` chỉ 100 ảnh.
+  * *Cách kiểm chứng:* Duyệt bổ sung 29 ảnh cảnh báo còn lại để đưa dataset về trạng thái `Release` (< 10% cảnh báo) và chạy lại với 3–5 seed (hoặc 50 epoch) để giảm nhiễu thống kê.
 
 ## 6. Quyết định và ghi chú AI
 (a) quyết định cuối; nếu Hold/Rework cần làm gì để thành Release? (b) Dùng AI viết code? Ghi 3 dòng: prompt chính, cách bạn kiểm code AI, 1 lần AI sai. Không dùng: ghi "không dùng".
@@ -73,3 +87,9 @@ Chưa chạy (tập trung hoàn thiện phần lõi pipeline và kiểm tra qua 
     1.Prompt chính: Hỏi giải thích đặc tả từng module trong docstring, xin mã giả từng bước và hướng dẫn cách trích xuất số liệu từ các file report.
     2.Cách kiểm code AI: Tự chuyển mã giả sang code Python, đối chiếu với common.py và chạy python -m pytest -q (đạt 79/79 passed) cùng python -m pipeline.run.
     3.1 lần gặp lỗi: Khi chuyển mã giả sang Python bị thụt lề nhầm khối lệnh trong autofix.py và second_opinion.py, đã tự rà soát lại thụt lề và chạy lại unit test để xác nhận.
+
+### 6(b). Đối chiếu lọc box nhỏ trên CVAT (Tùy chọn)
+* **Ảnh chụp minh chứng:** `submission/cvat_filter.png` (lọc `width < 20` trên 20 ảnh đầu hàng đợi `05_review_queue.csv`).
+* **Kết quả lọc trên CVAT:** Khớp **3 ảnh** (`img_0020`, `img_0053`, `img_0135`) với các bounding box có bề rộng `< 20 px`.
+* **Đối chiếu với `BOX_TINY` của pipeline:** Trên toàn tập dữ liệu, pipeline bắt được **6 box `BOX_TINY`** thuộc 4 ảnh (`img_0026` dòng 6, `img_0051` dòng 5, `img_0069` dòng 2, `img_0161` dòng 2–4), không trùng với 3 ảnh trên CVAT. Nguyên nhân là pipeline dùng ngưỡng chặt `min_box_px = 12 px` (chỉ bắt box siêu nhỏ trên toàn bộ 202 ảnh), còn bộ lọc `width < 20` trên CVAT có ngưỡng rộng hơn (bắt thêm nhóm box 12–19 px trong mẫu 20 ảnh đầu hàng đợi) để người kiểm duyệt rà soát bằng mắt.
+* **Vai trò của thuộc tính `can_review`:** Người gán nhãn đánh dấu `can_review = true` cho các ca mờ, bị che khuất hoặc phân vân lớp để chuyển sang vòng QC duyệt lại, tương đương với cơ chế chấm điểm ưu tiên và đẩy các cảnh báo độ tin cậy thấp vào hàng đợi `05_review_queue.csv` của pipeline.
