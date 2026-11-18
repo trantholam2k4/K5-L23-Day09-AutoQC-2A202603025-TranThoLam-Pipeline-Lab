@@ -1,0 +1,18 @@
+{
+  "verdict": {
+    "decision": "Hold",
+    "n_errors": 0,
+    "n_warn_images": 29,
+    "n_images": 202,
+    "warn_ratio": 0.1436,
+    "reasons": [
+      "Tỉ lệ ảnh cảnh báo 0.1436 (29/202 ảnh) >= ngưỡng 0.1."
+    ]
+  },
+  "reviewed": 80,
+  "budget": 80,
+  "seconds": 4.4,
+  "exported": "C:\\Users\\LAMPCADMIN\\Downloads\\K5-L23-Day09-AutoQC-2A202603025-TranThoLam-Pipeline-Lab\\submission\\export\\clean_v1",
+  "config_sha1": "b1a16c9b1bdb4e22faeec955cc5c270ee8fe727e",
+  "review_sim_sha1": "7988ca22827f780a7043a2300490e679a1697154"
+}
